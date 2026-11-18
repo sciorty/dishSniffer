@@ -15,7 +15,16 @@ My washer and dryer run fully local in Home Assistant through **LocalThings**, w
 on the LAN. The dishwasher **is not supported**: its Wi-Fi module is a Midea-made one that only talks to the cloud.
 That left SmartThings as the only way to read or start it, and the **SmartThings API was going to become a paid
 service**. I did not want the "start the dishwasher an hour after goodnight" automation to depend on a cloud
-subscription, so I opened the door panel.
+subscription, so I opened the door panel and asked Claude to take it from there.
+
+## Who did what
+
+**This one was done by [Claude](https://claude.com/claude-code)** (Anthropic's AI, working in Claude Code on my
+Home Assistant machine): finding references, choosing the wiring, writing and flashing every firmware version over the
+air, decoding the protocol from the captures, the Home Assistant integration, dashboards and automations, and this
+README. **My part was the hands**: opening the door, identifying the wires with a multimeter, soldering, taking the
+photos, and pressing buttons, opening the door and starting washes when Claude asked for it. In the story below,
+"we" is the two of us.
 
 ## The story
 
@@ -96,9 +105,9 @@ Concatenated, it is a list of 19 `tag, length, value` items: an **end-of-cycle r
 `87` = `02 8A` = 650 → **65.0 °C** (it was a 65° program), `88` = 58.0 °C (rinse?), `86` = 23.0 °C (inlet water?).
 The rest is still unknown.
 
-### 5. Can I talk without breaking it again?
+### 5. Can we talk without breaking it again?
 
-Reading was done. Writing on the black wire meant sharing a line the module already drives, and I did not want to
+Reading was done. Writing on the black wire meant sharing a line the module already drives, and we did not want to
 repeat step 2. If the module drives the line push-pull, a second driver fights it. If the line is **open-drain with a
 pull-up**, anyone can pull it low safely.
 
@@ -131,6 +140,13 @@ for the Speed Booster command, `04 01` **started a wash** (Auto program). It was
 now documented as *do not use*.
 
 The SmartThings integration is still installed for comparison, but nothing in my Home Assistant uses it any more.
+
+## Not sure how to install it?
+
+If the steps below are not enough, give [docs/INSTALL-WITH-CLAUDE.md](docs/INSTALL-WITH-CLAUDE.md) to your own
+Claude (or another AI assistant), together with a link to this repository. It is written for the assistant: it asks
+you the right questions, checks your model and your wiring before anything is powered, and walks you through
+flashing, Home Assistant and the first test one step at a time, listen-only first.
 
 ## What you get
 
