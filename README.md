@@ -12,7 +12,8 @@ connected**. Everything shows up in **Home Assistant** via MQTT discovery: no cl
 ## Why
 
 My washer and dryer run fully local in Home Assistant through **LocalThings**, which talks to Samsung appliances
-on the LAN. The dishwasher **is not supported**: its Wi-Fi module is a Midea-made one that only talks to the cloud.
+on the LAN. **My dishwasher model is not supported by LocalThings** (other Samsung dishwashers may be): on mine the
+Wi-Fi module only works through the SmartThings cloud.
 That left SmartThings as the only way to read or start it, and the **SmartThings API was going to become a paid
 service**. I did not want the "start the dishwasher an hour after goodnight" automation to depend on a cloud
 subscription, so I opened the door panel and asked Claude to take it from there.
