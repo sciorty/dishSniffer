@@ -13,7 +13,7 @@
 // Trasmissione (2.1+): G19 passa in open-drain con la corrente minima solo durante l'invio e solo dopo 1 s di bus zitto;
 // la linea nera ha una resistenza di pull-up verso 5 V (verificato con il comando «sonda»), quindi l'Atom può solo
 // tirarla giù, mai spingerla contro il modulo. ATTENZIONE: i pin dell'ESP32 non sono dichiarati tolleranti ai 5 V;
-// funziona da settimane così, ma lo fai a tuo rischio (una resistenza in serie da 1–10 kΩ è più prudente).
+// qui funziona così, ma lo fai a tuo rischio (una resistenza in serie da 1–10 kΩ è più prudente).
 // NON mettere resistenze verso massa sulle linee: il partitore 1k+2k le caricava e la scheda smetteva di rispondere.
 //
 // Baud e inversione sono regolabili da Home Assistant senza riflashare.

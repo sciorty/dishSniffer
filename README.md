@@ -1,35 +1,154 @@
 # dishSniffer: local control of a Samsung dishwasher
 
-An **M5Stack Atom Lite** (ESP32) clipped onto the serial bus between the main board of a **Samsung DW60A8050**
-dishwasher and its Wi-Fi module (**CWAP210M**). It reads everything the board says and can send commands, with the
-original Wi-Fi module **still connected** (SmartThings keeps working). Everything shows up in **Home Assistant**
-through MQTT discovery: no cloud, no SmartThings API.
+> **Built for one specific machine**: a Samsung **DW60A8050BB** dishwasher with the **CWAP210M** Wi-Fi module
+> (main board made by Midea). I am publishing it in case it works, or helps, on other models: other Samsung
+> dishwashers with the same module and the same Midea "E1" protocol are good candidates, but **nothing here has been
+> tested on anything else**. If you try it on another model, captures and pull requests are very welcome.
 
-What you get:
+An **M5Stack Atom Lite** (ESP32) wired **in parallel** to the serial bus between the dishwasher's main board and its
+Wi-Fi module. It decodes everything the board says and can send commands, while the original module **stays
+connected**. Everything shows up in **Home Assistant** via MQTT discovery: no cloud, no SmartThings.
 
-- **State**: idle / running / paused / delayed start, program, phase (pre-wash, wash, rinse, drying…), progress %,
-  minutes elapsed and remaining, delayed-start minutes, door, baskets, Speed Booster, armed for remote control.
-- **Energy**: kWh of the current wash, plus the end-of-cycle report (energy, wash and rinse temperatures).
-- **Commands**: start, pause, resume, cancel, program, baskets (the dishwasher must be armed with *Smart Control*,
-  exactly as SmartThings requires).
+## Why
+
+My washer and dryer run fully local in Home Assistant through **LocalThings**, which talks to Samsung appliances
+on the LAN. The dishwasher **is not supported**: its Wi-Fi module is a Midea-made one that only talks to the cloud.
+That left SmartThings as the only way to read or start it, and the **SmartThings API was going to become a paid
+service**. I did not want the "start the dishwasher an hour after goodnight" automation to depend on a cloud
+subscription, so I opened the door panel.
+
+## The story
+
+### 1. Five wires
+
+Under the door panel, next to the control board, sits a small blue board: the Wi-Fi module, a **CWAP210M**
+(MediaTek MT7686 inside). A 5-wire cable goes into its connector **CON1**: white, red, yellow, black, brown.
+A multimeter says: red is ground, white is +5 V, the other three are 5 V logic. Two of them should be a UART.
+
+![Wi-Fi module CWAP210M in the door panel](docs/img/modulo-wifi.jpg)
+
+### 2. Listen first, and the first mistake
+
+The first sniffer was an Atom Lite that only **listens**, with a "safe" level shifter on every line: a 1 kΩ + 2 kΩ
+divider, 5 V → 3.3 V. It did not last long. The extra 3 kΩ to ground on each line was enough load
+that the board stopped answering the module: the dishwasher dropped off SmartThings, and the module had to be reset
+and paired again.
+
+> **Lesson**: on this bus, never put a resistor to ground. A series resistor is fine; a load is not.
+
+The Atom was then wired directly (it has been running like that since). On the first capture:
+
+```
+G22  AA 0B E1 EA 00 00 01 00 00 63 00 C6                               ← every 15 s
+G19  AA 14 E1 00 00 00 00 00 00 63 03 44 01 04 A8 C0 01 00 01 00 F2    ← ~90 ms later
+```
+
+`AA … E1`, a length byte, and a checksum that is the two's complement of the sum. This is a **Midea UART protocol**,
+device type **E1** (dishwasher). The board asks *"how is the network?"* (`63`) every 15 seconds; the module answers
+with its IP backwards, `04 A8 C0` + `01` = 192.168.4.1, because right after the reset it was in pairing (AP) mode.
+That fixed the wiring for good: **yellow = board → module**, **black = module → board**, brown is a static line.
+
+![CON1 pinout](docs/img/con1-pinout.jpg)
+
+### 3. Pressing buttons for science
+
+Then came a long session of pressing panel buttons, changing programs, opening the door and starting cycles from the
+app, while the firmware logged **every byte of the status that changed**:
+
+```
+LOG evento porta/pannello: 01     ← Smart Control pressed
+LOG evento porta/pannello: 05     ← door open
+LOG evento porta/pannello: 04     ← door closed
+LOG stato byte 9: 00 -> 01        ← armed for remote control
+```
+
+The status is a 24-byte body: state, minutes left, program, baskets, delay, Speed Booster, and byte 9 is the
+**"armed"** flag. That flag matters: Samsung only accepts remote commands after you open the door, press
+*Smart Control* and close it again within a few seconds. Starting, cancelling and changing program from SmartThings showed the
+commands on the black wire:
+
+```
+G19  AA 10 E1 00 00 00 00 00 00 02 02 01 00 00 00 00 0A    ← start
+G19  AA 10 E1 00 00 00 00 00 00 02 02 05 00 00 00 00 06    ← cancel
+G19  AA 10 E1 00 00 00 00 00 00 02 03 09 00 00 00 00 01    ← program = Express 60°
+```
+
+### 4. A night wash, byte by byte
+
+An overnight **Intensive 65°** with the sniffer recording gave the phases (pre-wash, wash, rinse, drying, end; the door
+pops open by itself at the end) and two surprises. The first is a counter that grows at every phase:
+
+```
+G22  … 03 02 1A 07 00 00 1A 08 00 00 1A 09 00 00 1A 0A 00 00 1A 0B 00 13 3B    ← 0x13 = 19
+G22  … 04 02 1A 07 00 00 1A 08 00 00 1A 09 00 00 1A 0A 00 00 1A 0B 00 51 F9    ← 0x51 = 81
+```
+
+`1A0B` went 19 → 81 → 120 → 150: the energy of the current wash in **10 Wh** units, **1.50 kWh** at the end
+(SmartThings, for the same wash, showed +1.33 kWh in 0.33 kWh steps). The second surprise arrived at 02:12, four
+messages starting with `0A seq 46`:
+
+```
+G22  … 03 0A 01 46 02 13 70 04 FC FC FC FC 71 01 A7 72 01 12 73 01 22 80 02 00 F2 81 01 01 …
+G22  … 03 0A 02 46 00 85 01 03 86 02 00 E6 87 02 02 8A 88 02 02 44 89 01 00 90 01 00 …
+```
+
+Concatenated, it is a list of 19 `tag, length, value` items: an **end-of-cycle report**. `93` = 1500 Wh,
+`87` = `02 8A` = 650 → **65.0 °C** (it was a 65° program), `88` = 58.0 °C (rinse?), `86` = 23.0 °C (inlet water?).
+The rest is still unknown.
+
+### 5. Can I talk without breaking it again?
+
+Reading was done. Writing on the black wire meant sharing a line the module already drives, and I did not want to
+repeat step 2. If the module drives the line push-pull, a second driver fights it. If the line is **open-drain with a
+pull-up**, anyone can pull it low safely.
+
+So the firmware got a `sonda` (probe) command: switch G19 to open-drain at the **lowest drive strength**, pull it low
+for **20 µs** (less than half a bit at 9600 baud, so the board ignores it) and read the pin back:
+
+```
+TX sonda: il nero scende: open-drain, si puo trasmettere (scesa 5 volte su 5 con corrente minima)
+```
+
+It went low 5 times out of 5 and came straight back up: a pull-up, not a push-pull driver. Next step: send the
+**module's own status query**, the most harmless message there is, after 1 s of silence on the bus:
+
+```
+G19  AA 12 E1 00 00 00 00 00 00 03 01 00 00 00 00 00 00 00 09     ← sent by the Atom
+G22  AA 22 E1 C3 00 00 00 00 00 03 01 01 00 00 00 00 D2 02 04 …   ← board answers 56 ms later
+```
+
+### 6. Start
+
+With the dishwasher armed:
+
+```
+G19  AA 10 E1 00 00 00 00 00 00 02 02 01 00 00 00 00 0A                                     ← Atom: start
+G22  AA 22 E1 C3 00 00 00 00 00 02 01 02 00 00 00 00 D2 02 04 01 00 00 00 00 00 00 01 …   ← state 02, 210 min, pre-wash
+```
+
+It started. Cancel, pause, resume, program and baskets followed the same way. One accident on the way: while hunting
+for the Speed Booster command, `04 01` **started a wash** (Auto program). It was cancelled within a minute and is
+now documented as *do not use*.
+
+The SmartThings integration is still installed for comparison, but nothing in my Home Assistant uses it any more.
+
+## What you get
+
+- **State**: idle / running / paused / delayed start, program, phase, progress %, minutes elapsed and left, delay,
+  door, baskets, Speed Booster, armed.
+- **Energy**: kWh of the current wash, and the end-of-cycle report (energy, wash and rinse temperatures).
+- **Commands**: start, pause, resume, cancel, program, baskets (only when armed, exactly like SmartThings).
 - **Debug**: raw frames, a log of every status byte that changes, optional capture to files in Home Assistant.
 
-The protocol (a Midea "E1" UART protocol) is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+The full protocol is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The annotated night wash, in Italian, is in
+[docs/analisi-20261118.md](docs/analisi-20261118.md).
 
-> Entity names and code comments are in Italian (the author's language). The README and the protocol are in English.
+> Entity names and code comments are in Italian (my language). The README and the protocol are in English.
 
 ## Hardware
 
 - M5Stack Atom Lite (any ESP32 works; pins below are the Atom's).
 - 5 jumper wires. No other components.
-
-The bus is the 5-wire cable that goes into **CON1** of the Wi-Fi module, inside the control panel in the door.
-On the DW60A8050 the panel comes off after removing the Torx T15 screws on the inside of the door (see the service
-manual of your model).
-
-![Wi-Fi module CWAP210M in the door panel](docs/img/modulo-wifi.jpg)
-
-![CON1 pinout](docs/img/con1-pinout.jpg)
 
 | CON1 wire | Function | Atom Lite |
 |---|---|---|
@@ -39,17 +158,16 @@ manual of your model).
 | black | TX module → board (open-drain, pulled up to 5 V) | **G19** |
 | brown | static high | G23 (optional, only monitored) |
 
-Connect the Atom **in parallel**: tap the wires, leave the module plugged in.
+Connect the Atom **in parallel**: tap the wires, leave the module plugged in. On the DW60A8050 the control panel comes
+off after removing the Torx T15 screws on the inside of the door (check the service manual of your model).
 
 ⚠️ Read before wiring:
 
-- The lines are 5 V and the ESP32 is a 3.3 V part that is not specified as 5 V tolerant. This setup has been running
-  directly connected for weeks, but a **series resistor (1–10 kΩ)** on each data line is the cautious choice.
-- **Never put a resistor to ground** on the lines (e.g. a 1 k + 2 k divider): the extra load broke the communication
-  and the dishwasher dropped off SmartThings until the module was reset.
-- The Atom transmits on the black line in **open-drain** mode, with the lowest drive strength, only after 1 s of
-  silence on the bus. It can only pull the line low, never push it against the module. The `sonda` command (below)
-  checks this on your unit before any transmission.
+- The lines are 5 V and the ESP32 is a 3.3 V part, not specified as 5 V tolerant. Mine runs directly connected
+  (since November 2026), but a **series resistor (1–10 kΩ)** on each data line is the cautious choice.
+- **Never put a resistor to ground** on the lines (see step 2 above).
+- The Atom transmits on the black line in **open-drain**, with the lowest drive strength, only after 1 s of silence.
+  Run `sonda` on your unit before any other transmission.
 - You are working inside a mains appliance: unplug it before opening the panel. Your risk, your warranty.
 
 ## Firmware
@@ -69,18 +187,18 @@ OTA has no password: keep the Atom on a trusted network.
 
 ## Home Assistant
 
-1. An MQTT broker (the **Mosquitto** add-on) and the **MQTT** integration. Create a Home Assistant user for the Atom and
-   put it in `secrets.h`.
+1. An MQTT broker (the **Mosquitto** add-on) and the **MQTT** integration. Create a Home Assistant user for the Atom
+   and put it in `secrets.h`.
 2. Power the Atom: the device **"Lavastoviglie (sniffer bus Wi-Fi)"** appears by itself (MQTT discovery), with
    sensors, buttons (Avvia, Pausa, Riprendi, Annulla) and selects (Programma, Cestelli).
 3. Optional, in [homeassistant/](homeassistant/):
    - [dashboard-example.yaml](homeassistant/dashboard-example.yaml): a ready-made view (state, controls, last wash);
-   - [automations/](homeassistant/automations/): "goodnight" script + automation that start the dishwasher N hours
-     later if it is armed;
-   - [pyscript/](homeassistant/pyscript/) (needs the [pyscript](https://github.com/custom-components/pyscript)
-     integration): `trama_lavastoviglie.py` writes every frame to `/config/lavastoviglie/catture/YYYYMMDD.txt`
-     (30 days); `lavastoviglie_energia.py` turns the per-wash energy into an ever-increasing
-     `sensor.lavastoviglie_energia` for the Energy dashboard.
+   - [automations/](homeassistant/automations/): a "goodnight" script and an automation that start the dishwasher
+     N hours later if it is armed;
+   - [pyscript/](homeassistant/pyscript/) (needs [pyscript](https://github.com/custom-components/pyscript)):
+     `trama_lavastoviglie.py` writes every frame to `/config/lavastoviglie/catture/YYYYMMDD.txt` (30 days);
+     `lavastoviglie_energia.py` turns the per-wash energy into an ever-increasing `sensor.lavastoviglie_energia` for
+     the Energy dashboard.
 
 ### Main entities
 
@@ -95,7 +213,7 @@ OTA has no password: keep the Atom on a trusted network.
 | `sensor.…_ultimo_lavaggio_*` | end-of-cycle report: energy, temperatures, raw fields |
 | `button.…_avvia / _pausa / _riprendi / _annulla` | commands |
 | `select.…_programma`, `select.…_cestelli` | program, baskets |
-| `sensor.…_ultimo_comando` | result of the last command (echo seen + board answered) |
+| `sensor.…_ultimo_comando` | result of the last command (echo seen and board answered) |
 | `switch.…_registra_trama`, `number.…_baud`, `switch.…_segnale_invertito` | debug |
 
 (`…` = `lavastoviglie_sniffer_bus_wi_fi`)
@@ -112,14 +230,11 @@ OTA has no password: keep the Atom on a trusted network.
 | `dish/tx/esito` | result of the last transmission (retained) |
 | `dish/stats`, `dish/status` | diagnostics, online/offline |
 
-`sonda` pulls the black line low for 20 µs (shorter than half a bit, the board ignores it) and checks that it actually
-goes low. `stato` sends the module's own status query: if the board answers, transmission works.
-
 ## Other models
 
-The CWAP210M and this E1 protocol are used on other Samsung (Midea-made) dishwashers: the decoder logs every unknown
-message once on `dish/log`, which is a good starting point. Issues and pull requests with captures from other models
-are welcome.
+If your dishwasher has a CWAP210M (or another Samsung module on a Midea board), start in listen-only mode: flash the
+firmware, connect only GND, yellow → G22 and black → G19, and watch `dish/log`. The decoder logs every message it does
+not know once, and every status byte that changes. If you see `AA … E1` frames, you are on the same protocol.
 
 ## License
 
