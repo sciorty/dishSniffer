@@ -1,0 +1,51 @@
+# Example Lovelace view (paste into a dashboard in YAML mode, under "views:").
+# Entity ids are the ones created by MQTT discovery for the device "Lavastoviglie (sniffer bus Wi-Fi)".
+- title: Dishwasher
+  path: dishwasher
+  type: sections
+  max_columns: 2
+  sections:
+    - type: grid
+      cards:
+        - type: heading
+          heading: Now
+        - type: markdown
+          content: >-
+            {% if is_state('binary_sensor.lavastoviglie_sniffer_bus_wi_fi_armata_da_remoto_bus', 'on') %}
+            ✅ **Smart Control on**: commands reach the dishwasher.
+            {% else %}⚠️ **Smart Control off**: open the door, press Smart Control, close the door.{% endif %}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_stato_bus, name: State}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_programma_bus, name: Program}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_fase_bus, name: Phase}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_minuti_alla_fine_bus, name: Minutes left}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_avanzamento_bus, name: Progress}
+        - {type: tile, entity: binary_sensor.lavastoviglie_sniffer_bus_wi_fi_porta_bus, name: Door}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_energia_lavaggio_in_corso, name: Energy this wash}
+    - type: grid
+      cards:
+        - type: heading
+          heading: Controls
+        - {type: tile, entity: button.lavastoviglie_sniffer_bus_wi_fi_avvia, name: Start, hide_state: true,
+           tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.lavastoviglie_sniffer_bus_wi_fi_avvia}}}
+        - {type: tile, entity: button.lavastoviglie_sniffer_bus_wi_fi_pausa, name: Pause, hide_state: true,
+           tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.lavastoviglie_sniffer_bus_wi_fi_pausa}}}
+        - {type: tile, entity: button.lavastoviglie_sniffer_bus_wi_fi_riprendi, name: Resume, hide_state: true,
+           tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.lavastoviglie_sniffer_bus_wi_fi_riprendi}}}
+        - {type: tile, entity: button.lavastoviglie_sniffer_bus_wi_fi_annulla, name: Cancel, hide_state: true,
+           tap_action: {action: perform-action, perform_action: button.press, target: {entity_id: button.lavastoviglie_sniffer_bus_wi_fi_annulla},
+                        confirmation: {text: Cancel the wash?}}}
+        - {type: tile, entity: select.lavastoviglie_sniffer_bus_wi_fi_programma, name: Program, features: [{type: select-options}]}
+        - {type: tile, entity: select.lavastoviglie_sniffer_bus_wi_fi_cestelli, name: Baskets, features: [{type: select-options}]}
+    - type: grid
+      cards:
+        - type: heading
+          heading: Last wash
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_ultimo_lavaggio_energia, name: Energy}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_ultimo_lavaggio_temperatura_lavaggio, name: Wash temperature}
+        - {type: tile, entity: sensor.lavastoviglie_sniffer_bus_wi_fi_ultimo_lavaggio_temperatura_risciacquo, name: Rinse temperature}
+        - type: history-graph
+          title: State and phase, 24 h
+          hours_to_show: 24
+          entities:
+            - sensor.lavastoviglie_sniffer_bus_wi_fi_stato_bus
+            - sensor.lavastoviglie_sniffer_bus_wi_fi_fase_bus

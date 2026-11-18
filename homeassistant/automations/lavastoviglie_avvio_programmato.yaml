@@ -1,0 +1,38 @@
+# Example: start the dishwasher N hours after "goodnight", only if it is armed (Smart Control).
+# Arming on this model: open the door, press Smart Control, close the door within a few seconds.
+# Needs: input_datetime.lavastoviglie_avvio_previsto (has_date + has_time), set by your goodnight script,
+#        and a notify service of your choice (replace notify.notify).
+id: lavastoviglie_avvio_programmato
+alias: Dishwasher - scheduled start
+triggers:
+  - trigger: time
+    at: input_datetime.lavastoviglie_avvio_previsto
+actions:
+  - if:
+      - condition: state
+        entity_id: binary_sensor.lavastoviglie_sniffer_bus_wi_fi_armata_da_remoto_bus
+        state: "on"
+      - condition: template
+        value_template: >-
+          {{ states('sensor.lavastoviglie_sniffer_bus_wi_fi_stato_bus') not in ['In funzione', 'Partenza ritardata', 'In pausa'] }}
+    then:
+      - action: button.press
+        target:
+          entity_id: button.lavastoviglie_sniffer_bus_wi_fi_avvia
+      - wait_template: "{{ is_state('sensor.lavastoviglie_sniffer_bus_wi_fi_stato_bus', 'In funzione') }}"
+        timeout: "00:02:00"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ not is_state('sensor.lavastoviglie_sniffer_bus_wi_fi_stato_bus', 'In funzione') }}"
+        then:
+          - action: notify.notify
+            data:
+              title: Dishwasher did not start
+              message: The start command was sent but the dishwasher is not running.
+    else:
+      - action: notify.notify
+        data:
+          title: Dishwasher not started
+          message: It is no longer armed (door opened) or it was already running.
+mode: single

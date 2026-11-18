@@ -1,0 +1,27 @@
+# Example goodnight script: if the dishwasher is armed, schedule the start in N hours;
+# if it is already running / delayed / paused, do nothing; otherwise warn.
+# Needs: input_number.lavastoviglie_ore_ritardo_avvio (hours) and input_datetime.lavastoviglie_avvio_previsto.
+avvia_lavastoviglie:
+  alias: Dishwasher at goodnight
+  sequence:
+    - variables:
+        occupata: >-
+          {{ states('sensor.lavastoviglie_sniffer_bus_wi_fi_stato_bus') in ['In funzione', 'Partenza ritardata', 'In pausa'] }}
+    - choose:
+        - conditions: "{{ occupata }}"
+          sequence: []
+        - conditions:
+            - condition: state
+              entity_id: binary_sensor.lavastoviglie_sniffer_bus_wi_fi_armata_da_remoto_bus
+              state: "on"
+          sequence:
+            - action: input_datetime.set_datetime
+              target:
+                entity_id: input_datetime.lavastoviglie_avvio_previsto
+              data:
+                datetime: >-
+                  {{ (now() + timedelta(hours=states('input_number.lavastoviglie_ore_ritardo_avvio') | float(1))).strftime('%Y-%m-%d %H:%M:%S') }}
+      default:
+        - action: notify.notify
+          data:
+            message: Dishwasher not armed!
