@@ -49,12 +49,15 @@ Query (sent by the module, harmless, the board answers within ~60 ms):
 | 17 | `04` / `00` display / standby ? |
 | 19 | program: `01` Auto 45-65°, `02` Intensive 65°, `04` Eco 50°, `05` Delicate 40°, `08` Pre-wash, `09` Express 60°, `0D` Extra silent, `10` Self clean |
 | 20 | baskets: `01` both, `04` lower only |
-| 21 | bit 0 = Speed Booster |
+| 21 | bit 0 = Speed Booster, bit 1 = **Sanitize** (seen while toggling them on the panel: `01` → `03` → `02`) |
+| 22 | bit 1 = **auto door release disabled** (`04` = auto-open in drying ON, `06` = OFF; set from SmartThings, see commands) |
 | 23 | changed by command `0A XX` ? |
 
 ### Door / panel event
-Type 04, body `03 00 XX 00 00`: `05` door open, `04` closed, `00` washing (locked), `01` seen at power-off and when
-arming Smart Control. At the end of a full cycle the door opens by itself.
+Type 04, body `03 00 XX 00 00`: `05` door open, `04` closed, `00` washing (locked) / panel off, `01` panel on (also when
+arming Smart Control). **Auto door release**: with the option on, the door opens by itself in the drying phase about
+10 minutes before the end, and the board sends only `01`, never `05` (seen 18/11 02:02 and 19/11 16:51, both while
+running in phase `04`). Firmware 2.5 reports that case as `aperta (automatica)`.
 
 ## Commands (module → board, type 02, body of 6 bytes)
 
@@ -71,6 +74,7 @@ The board accepts them **only when armed** (byte 9 = `01`).
 | `05 00` / `05 02` | baskets both / lower only (`05 01`, upper only, is ignored) | yes |
 | `04 XX …` | ⚠️ **starts a wash** (`04 01` started an Auto cycle). Do not use | yes |
 | `0A XX …` | changes status byte 23 | ? |
+| `01 02 00 00 00 00` / `01 02 01 00 00 00` | auto door release in drying **on / off** (status byte 22 bit 1), sent by the module when the option is toggled in SmartThings | yes (19/11, from the Atom; accepted **also when not armed**) |
 
 Example, start: `AA 10 E1 00 00 00 00 00 00 02 02 01 00 00 00 00 0A`.
 
@@ -80,7 +84,7 @@ Speed Booster and sanitize set from SmartThings produce no traffic before the st
 
 | Tag | Meaning |
 |---|---|
-| `1A0B` | energy of the current wash, in **10 Wh** units (e.g. 19 → 81 → 120 → 150 = 1.50 kWh at the end of an Intensive 65°). Resets every wash |
+| `1A0B` | energy, in **10 Wh** units. **Cumulative, it does not reset at every wash** (it was 0 right after a reset of the Wi-Fi module): 0 → 150 over an Intensive 65°, then 194 → 349 over an Auto + Sanitize = 1.55 kWh, exactly the `93` of that wash's report. The energy of one wash is the increase while it runs |
 | `1A07`–`1A0A` | always 0 so far |
 
 ## End-of-cycle report
@@ -92,9 +96,12 @@ number of items (`0x13` = 19), then items `tag, length, value`.
 |---|---|---|
 | 93 | 1500 | energy, Wh |
 | 87 | 650 | 65.0 °C, wash temperature |
-| 88 | 580 | 58.0 °C, rinse temperature ? |
+| 88 | 580 / 700 | final rinse temperature: 58.0 °C in an Intensive 65°, **70.0 °C with Sanitize** |
 | 86 | 230 | 23.0 °C, inlet water ? |
-| 70–73, 80–85, 89–92, 94 | | unknown (compare different programs) |
+| 80 | 242 → 243 | **completed washes, total** (a wash cancelled early is not counted) |
+| 71, 72 | 167 / 18 (Intensive), 130 / 22 (Auto + Sanitize) | ? water (dl)? |
+| 84 | `A0` (Intensive), `C0` (Auto + Sanitize) | flags ? |
+| 70, 73, 81–83, 85, 89–92, 94 | | same in both washes so far |
 
 A full annotated wash (Italian) is in [analisi-20261118.md](analisi-20261118.md).
 

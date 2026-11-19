@@ -93,7 +93,8 @@ G22  … 03 02 1A 07 00 00 1A 08 00 00 1A 09 00 00 1A 0A 00 00 1A 0B 00 13 3B   
 G22  … 04 02 1A 07 00 00 1A 08 00 00 1A 09 00 00 1A 0A 00 00 1A 0B 00 51 F9    ← 0x51 = 81
 ```
 
-`1A0B` went 19 → 81 → 120 → 150: the energy of the current wash in **10 Wh** units, **1.50 kWh** at the end
+`1A0B` went 19 → 81 → 120 → 150: energy in **10 Wh** units, **1.50 kWh** at the end (a second wash later showed it is a
+running total, not per wash: see step 7)
 (SmartThings, for the same wash, showed +1.33 kWh in 0.33 kWh steps). The second surprise arrived at 02:12, four
 messages starting with `0A seq 46`:
 
@@ -140,6 +141,22 @@ It started. Cancel, pause, resume, program and baskets followed the same way. On
 for the Speed Booster command, `04 01` **started a wash** (Auto program). It was cancelled within a minute and is
 now documented as *do not use*.
 
+### 7. A second wash, and a wrong guess
+
+An **Auto 45-65° with Sanitize** (19/11) corrected me twice. `1A0B` did not start from zero: it went on from 194 to 349,
+and the 155 difference (1.55 kWh) is exactly the `93` of that wash's report, so the counter is a **running total** and the
+energy of a wash is its increase. The door opened by itself 10 minutes before the end, but the board never sent `05`:
+during drying it only sends `01`, which elsewhere just means "panel on". And toggling *auto door release* in SmartThings
+showed one more command on the black wire:
+
+```
+G19  AA 10 E1 00 00 00 00 00 00 02 01 02 01 00 00 00 09    ← auto door release OFF   (status byte 22: 04 → 06)
+G19  AA 10 E1 00 00 00 00 00 00 02 01 02 00 00 00 00 0A    ← auto door release ON    (status byte 22: 06 → 04)
+```
+
+The report also showed Sanitize pushing the final rinse from 58 to **70 °C**, and tag `80` counting the completed washes.
+Firmware 2.5 has all of it, including the switch for the auto door release.
+
 The SmartThings integration is still installed for comparison, but nothing in my Home Assistant uses it any more.
 
 ## Not sure how to install it?
@@ -152,9 +169,11 @@ flashing, Home Assistant and the first test one step at a time, listen-only firs
 ## What you get
 
 - **State**: idle / running / paused / delayed start, program, phase, progress %, minutes elapsed and left, delay,
-  door, baskets, Speed Booster, armed.
-- **Energy**: kWh of the current wash, and the end-of-cycle report (energy, wash and rinse temperatures).
-- **Commands**: start, pause, resume, cancel, program, baskets (only when armed, exactly like SmartThings).
+  door (also when it opens by itself), baskets, Speed Booster, Sanitize, armed.
+- **Energy**: the board's energy counter, the end-of-cycle report (energy, wash and rinse temperatures, completed washes)
+  and, with the pyscript, the kWh of the current wash.
+- **Commands**: start, pause, resume, cancel, program, baskets (only when armed, exactly like SmartThings), auto door
+  release on/off.
 - **Debug**: raw frames, a log of every status byte that changes, optional capture to files in Home Assistant.
 
 The full protocol is in [docs/PROTOCOL.md](docs/PROTOCOL.md). The annotated night wash, in Italian, is in
@@ -214,8 +233,8 @@ OTA has no password: keep the Atom on a trusted network.
      N hours later if it is armed;
    - [pyscript/](homeassistant/pyscript/) (needs [pyscript](https://github.com/custom-components/pyscript)):
      `trama_lavastoviglie.py` writes every frame to `/config/lavastoviglie/catture/YYYYMMDD.txt` (30 days);
-     `lavastoviglie_energia.py` turns the per-wash energy into an ever-increasing `sensor.lavastoviglie_energia` for
-     the Energy dashboard.
+     `lavastoviglie_energia.py` turns the board's counter into an ever-increasing `sensor.lavastoviglie_energia` for
+     the Energy dashboard and `sensor.lavastoviglie_energia_lavaggio` (kWh of the current or last wash).
 
 ### Main entities
 
@@ -225,8 +244,11 @@ OTA has no password: keep the Atom on a trusted network.
 | `sensor.…_programma_bus`, `…_fase_bus` | program, phase |
 | `sensor.…_minuti_alla_fine_bus`, `…_minuti_trascorsi_bus`, `…_avanzamento_bus` | minutes left / elapsed, progress |
 | `binary_sensor.…_armata_da_remoto_bus` | armed (Smart Control) |
-| `binary_sensor.…_porta_bus` | door |
-| `sensor.…_energia_lavaggio_in_corso` | kWh of the current wash |
+| `binary_sensor.…_porta_bus` | door (on also when it opens by itself in drying) |
+| `binary_sensor.…_speed_booster_bus`, `…_igienizzazione_bus` | Speed Booster, Sanitize |
+| `switch.…_apertura_automatica_porta` | auto door release in drying (on/off) |
+| `sensor.…_energia_lavaggio_in_corso` | the board's energy counter, kWh (a running total, despite the name) |
+| `sensor.…_lavaggi_completati_totale` | completed washes, from the end-of-cycle report |
 | `sensor.…_ultimo_lavaggio_*` | end-of-cycle report: energy, temperatures, raw fields |
 | `button.…_avvia / _pausa / _riprendi / _annulla` | commands |
 | `select.…_programma`, `select.…_cestelli` | program, baskets |
@@ -243,7 +265,7 @@ OTA has no password: keep the Atom on a trusted network.
 | `dish/energia`, `dish/ciclo` | current-wash energy, end-of-cycle report (retained) |
 | `dish/capture` | every frame: `<millis> G22\|G19 <gap_ms> <hex>` |
 | `dish/log` | one line per changed status byte, module commands, door events |
-| `dish/tx/cmd` | `sonda`, `stato`, `avvia`, `annulla`, `pausa`, `riprendi`, `programma XX`, `cestelli ZZ` (hex); never retained |
+| `dish/tx/cmd` | `sonda`, `stato`, `avvia`, `annulla`, `pausa`, `riprendi`, `programma XX`, `cestelli ZZ` (hex), `rilascio ON` / `rilascio OFF`; never retained |
 | `dish/tx/esito` | result of the last transmission (retained) |
 | `dish/stats`, `dish/status` | diagnostics, online/offline |
 

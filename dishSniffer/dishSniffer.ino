@@ -27,7 +27,7 @@
 #include "esp_rom_gpio.h"
 #include "soc/gpio_sig_map.h"
 
-#define FW_VERSION     "2.4 (18/11/2026)"
+#define FW_VERSION     "2.5 (19/11/2026)"
 #ifndef AIO_SERVER
 #define AIO_SERVER     "homeassistant.local"   // indirizzo del broker MQTT: meglio definirlo in secrets.h
 #endif
@@ -115,13 +115,13 @@ void hexString(const uint8_t *b, uint16_t n, char *out)
 // 2.1: prove di trasmissione (vedi «prove di trasmissione sul NERO» più sotto)
 int  sondaEsito = -1;                 // -1 non provata, 0 non scende, 1 scende
 char txRichiesta = 0;                 // 's' sonda, 'q' domanda di stato, 'c' comando (2.2)
-uint8_t cmdCorpo[2] = {0, 0}; char cmdNome[24] = ""; uint8_t cmdFrame[17];
+uint8_t cmdCorpo[3] = {0, 0}; char cmdNome[24] = ""; uint8_t cmdFrame[17];
 unsigned long txChiesta = 0, txInviata = 0;
 bool txAttesa = false, txEco = false, txRisposta = false;
 const uint8_t DOMANDA_STATO[] = {0xAA, 0x12, 0xE1, 0, 0, 0, 0, 0, 0, 0x03, 0x01, 0, 0, 0, 0, 0, 0, 0, 0x09};
 uint8_t st[24]; bool haveSt = false, stCambiato = false;
 unsigned long ultimoStato = 0;
-int porta = -1;                       // 0 chiusa, 1 aperta, 2 in lavaggio (bloccata)
+int porta = -1;                       // 0 chiusa, 1 aperta, 2 in lavaggio (bloccata), 3 aperta da sola (asciugatura)
 struct Altro { uint8_t dir, tipo, sotto; uint32_t firma; };
 Altro altri[12]; uint8_t nAltri = 0;
 
@@ -145,7 +145,7 @@ const char *nomeCestelli(uint8_t z) { switch (z) { case 0x01: return "Entrambi";
 // 2.4 (18/11/2026): 03 = in pausa (comando 02 02; 02 03 riprende). ATTENZIONE: il comando 04 XX fa PARTIRE un lavaggio
 // (provato 04 01: Auto 45-65° avviato, annullato subito); 0A XX cambia il byte 23 dello stato (opzione da capire).
 const char *nomeStato(uint8_t x) { switch (x) { case 0x01: return "Ferma"; case 0x02: return "In funzione"; case 0x03: return "In pausa"; default: return NULL; } }
-const char *nomePorta() { switch (porta) { case 0: return "chiusa"; case 1: return "aperta"; case 2: return "bloccata (lavaggio)"; default: return "?"; } }
+const char *nomePorta() { switch (porta) { case 0: return "chiusa"; case 1: return "aperta"; case 2: return "bloccata (lavaggio)"; case 3: return "aperta (automatica)"; default: return "?"; } }
 
 void pubblicaStato()
 {
@@ -160,10 +160,10 @@ void pubblicaStato()
   if ((n = nomeCestelli(st[20])))  snprintf(cest, sizeof(cest), "%s", n); else snprintf(cest, sizeof(cest), "codice %02X", st[20]);
   char j[600];
   snprintf(j, sizeof(j), "{\"stato\":%u,\"stato_nome\":\"%s\",\"programma\":%u,\"programma_nome\":\"%s\",\"minuti\":%u,"
-           "\"fase\":%u,\"fase_nome\":\"%s\",\"armata\":%u,\"opzione\":\"%02X\",\"cestelli\":\"%s\",\"ritardo\":%u,\"booster\":%u,"
+           "\"fase\":%u,\"fase_nome\":\"%s\",\"armata\":%u,\"opzione\":\"%02X\",\"cestelli\":\"%s\",\"ritardo\":%u,\"booster\":%u,\"igiene\":%u,\"rilascio\":%u,"
            "\"avanzamento\":%u,\"trascorsi\":%u,\"porta\":\"%s\",\"raw\":\"%s\"}",
            st[1], stato, st[19], prog, (unsigned)(st[5] * 256 + st[6]), st[16], fase, st[9] ? 1 : 0, st[20], cest,
-           (unsigned)(st[10] * 256 + st[11]), st[21] & 0x01, st[2], (unsigned)(st[3] * 256 + st[4]), nomePorta(), raw);   // 2.0: byte 2 avanzamento %, 3-4 minuti trascorsi   // 1.9: byte 10-11 ritardo (min), byte 21 Speed Booster
+           (unsigned)(st[10] * 256 + st[11]), st[21] & 0x01, (st[21] >> 1) & 0x01, (st[22] & 0x02) ? 0 : 1, st[2], (unsigned)(st[3] * 256 + st[4]), nomePorta(), raw);   // 2.0: byte 2 avanzamento %, 3-4 minuti trascorsi   // 1.9: byte 10-11 ritardo (min), byte 21 Speed Booster
   client.publish(stato_topic, j, true);
   ultimoStato = millis(); stCambiato = false;
 }
@@ -217,25 +217,28 @@ void contatori(const uint8_t *c, uint8_t clen)
 // Rapporto di fine ciclo: 4 messaggi «0A seq 46 …» (seq 1-4); i dati, messi in fila, sono: tipo, numero di voci, poi
 // le voci «etichetta, lunghezza, valore». Visto: 93 = energia in Wh; 87/88/86 = temperature in decimi di °C (65,0 / 58,0 / 23,0
 // in un Intensivo 65°: da confermare con altri programmi); 70-73, 80-85, 89-92, 94 da capire.
+// 2.5 (19/11/2026, Auto 45-65° + Igienizzazione): 88 = 70,0 °C (l'igienizzazione alza il risciacquo finale da 58 a 70);
+// 80 = lavaggi completati in tutto (242 → 243; la prova interrotta del 18/11 non conta); 93 = 1550 Wh = esattamente
+// l'aumento del contatore 1A0B (1,94 → 3,49): il contatore è un totale, non riparte a ogni lavaggio.
 uint8_t rapporto[160]; uint8_t lunRapporto = 0;
 void finisciRapporto()
 {
   if (lunRapporto < 2 || !client.connected()) return;
   uint8_t voci = rapporto[1]; uint16_t i = 2;
-  long energia = -1, t86 = -1, t87 = -1, t88 = -1;
+  long energia = -1, t86 = -1, t87 = -1, t88 = -1, lavaggi = -1;
   static char campi[400]; int m = 0; campi[0] = 0;
   for (uint8_t v = 0; v < voci && i + 1 < lunRapporto; v++)
   {
     uint8_t tag = rapporto[i], len = rapporto[i + 1];
     if (i + 2 + len > lunRapporto) break;
     unsigned long val = 0; for (uint8_t k = 0; k < len && k < 4; k++) val = (val << 8) | rapporto[i + 2 + k];
-    if (tag == 0x93) energia = val; else if (tag == 0x86) t86 = val; else if (tag == 0x87) t87 = val; else if (tag == 0x88) t88 = val;
+    if (tag == 0x93) energia = val; else if (tag == 0x86) t86 = val; else if (tag == 0x87) t87 = val; else if (tag == 0x88) t88 = val; else if (tag == 0x80) lavaggi = val;
     m += snprintf(campi + m, sizeof(campi) - m, "%s%02X=%lu", m ? " " : "", tag, val);
     i += 2 + len;
   }
   char j[560];
-  snprintf(j, sizeof(j), "{\"energia_kwh\":%.3f,\"t86\":%.1f,\"t87\":%.1f,\"t88\":%.1f,\"campi\":\"%s\"}",
-           energia >= 0 ? energia / 1000.0 : -1.0, t86 >= 0 ? t86 / 10.0 : -1.0, t87 >= 0 ? t87 / 10.0 : -1.0, t88 >= 0 ? t88 / 10.0 : -1.0, campi);
+  snprintf(j, sizeof(j), "{\"energia_kwh\":%.3f,\"t86\":%.1f,\"t87\":%.1f,\"t88\":%.1f,\"lavaggi\":%ld,\"campi\":\"%s\"}",
+           energia >= 0 ? energia / 1000.0 : -1.0, t86 >= 0 ? t86 / 10.0 : -1.0, t87 >= 0 ? t87 / 10.0 : -1.0, t88 >= 0 ? t88 / 10.0 : -1.0, lavaggi, campi);
   client.publish(ciclo_topic, j, true);
   logLine("rapporto di fine ciclo ricevuto");
 }
@@ -257,7 +260,11 @@ void trattaTrama(uint8_t dir, const uint8_t *f, uint8_t n)   // dir 0 = scheda�
     if ((tipo == 0x02 || tipo == 0x03 || tipo == 0x04) && clen >= 24 && c[0] == 0x01) { nuovoStato(c); return; }
     if (tipo == 0x04 && clen >= 3 && c[0] == 0x03)
     {
+      // 2.5 (19/11/2026): verso la fine dell'asciugatura la lavastoviglie apre la porta da sola (circa 10 minuti prima della
+      // fine segnalata) e la scheda manda solo 01, senza 05: visto il 18/11 alle 02:02 e il 19/11 alle 16:51, sempre in
+      // funzione e in fase «Asciugatura». Fuori da lì 01/00 sono il pannello che si accende/spegne e non cambiano la porta.
       int p = c[2] == 0x05 ? 1 : c[2] == 0x04 ? 0 : c[2] == 0x00 ? 2 : porta;
+      if (c[2] == 0x01 && haveSt && st[1] == 0x02 && st[16] == 0x04) p = 3;
       char l[48]; snprintf(l, sizeof(l), "evento porta/pannello: %02X", c[2]); logLine(l);
       if (p != porta) { porta = p; stCambiato = true; }
       return;
@@ -357,13 +364,15 @@ void publishDiscovery()
     {"sensor", "bus_minuti", "Minuti alla fine (bus)", "{{ value_json.minuti }}", ",\"unit_of_meas\":\"min\",\"ic\":\"mdi:timer-sand\""},
     {"sensor", "bus_fase", "Fase (bus)", "{{ value_json.fase_nome }}", ",\"ic\":\"mdi:water-sync\""},
     {"binary_sensor", "bus_armata", "Armata da remoto (bus)", "{{ 'ON' if value_json.armata == 1 else 'OFF' }}", ",\"ic\":\"mdi:remote\""},
-    {"binary_sensor", "bus_porta", "Porta (bus)", "{{ 'ON' if value_json.porta == 'aperta' else 'OFF' }}", ",\"dev_cla\":\"door\""},
+    {"binary_sensor", "bus_porta", "Porta (bus)", "{{ 'ON' if value_json.porta in ['aperta', 'aperta (automatica)'] else 'OFF' }}", ",\"dev_cla\":\"door\""},
     {"sensor", "bus_opzione", "Opzione (bus)", "{{ value_json.opzione }}", ",\"ic\":\"mdi:tune\",\"ent_cat\":\"diagnostic\""},
     {"sensor", "bus_cestelli", "Cestelli (bus)", "{{ value_json.cestelli }}", ",\"ic\":\"mdi:tray-full\""},
     {"sensor", "bus_ritardo", "Ritardo partenza (bus)", "{{ value_json.ritardo }}", ",\"unit_of_meas\":\"min\",\"ic\":\"mdi:timer-play-outline\""},
     {"sensor", "bus_avanzamento", "Avanzamento (bus)", "{{ value_json.avanzamento }}", ",\"unit_of_meas\":\"%\",\"ic\":\"mdi:progress-clock\""},
     {"sensor", "bus_trascorsi", "Minuti trascorsi (bus)", "{{ value_json.trascorsi }}", ",\"unit_of_meas\":\"min\",\"ic\":\"mdi:timer-outline\""},
     {"binary_sensor", "bus_booster", "Speed Booster (bus)", "{{ 'ON' if value_json.booster == 1 else 'OFF' }}", ",\"ic\":\"mdi:rocket-launch-outline\""},
+    // 2.5 (19/11/2026): byte 21 bit 1 = Igienizzazione (prova di Dario: 01 booster, 03 booster+igiene, 02 solo igiene)
+    {"binary_sensor", "bus_igiene", "Igienizzazione (bus)", "{{ 'ON' if value_json.igiene == 1 else 'OFF' }}", ",\"ic\":\"mdi:shield-sun-outline\""},
     {"sensor", "bus_raw", "Stato grezzo (bus)", "{{ value_json.raw }}", ",\"ic\":\"mdi:code-brackets\",\"ent_cat\":\"diagnostic\""},
   };
   for (const E &x : e)
@@ -383,6 +392,7 @@ void publishDiscovery()
     {"ciclo_t87", "Ultimo lavaggio: temperatura lavaggio", "{{ value_json.t87 }}", ",\"unit_of_meas\":\"°C\",\"dev_cla\":\"temperature\""},
     {"ciclo_t88", "Ultimo lavaggio: temperatura risciacquo", "{{ value_json.t88 }}", ",\"unit_of_meas\":\"°C\",\"dev_cla\":\"temperature\""},
     {"ciclo_t86", "Ultimo lavaggio: temperatura iniziale", "{{ value_json.t86 }}", ",\"unit_of_meas\":\"°C\",\"dev_cla\":\"temperature\""},
+    {"ciclo_lavaggi", "Lavaggi completati (totale)", "{{ value_json.lavaggi }}", ",\"ic\":\"mdi:counter\",\"stat_cla\":\"total_increasing\""},
     {"ciclo_campi", "Ultimo lavaggio: dati grezzi", "{{ value_json.campi[:250] }}", ",\"ic\":\"mdi:code-brackets\",\"ent_cat\":\"diagnostic\""},
   };
   for (const C &x : cc)
@@ -416,6 +426,11 @@ void publishDiscovery()
            R"(","val_tpl":"{{ value_json.cestelli }}","options":["Entrambi","Solo inferiore"],)"
            R"("cmd_tpl":"cestelli {{ '02' if value == 'Solo inferiore' else '00' }}","ic":"mdi:tray-full",%s})", dev);
   client.publish("homeassistant/select/dish_cestelli/config", big, true);
+  // 2.5: interruttore «Apertura automatica porta» (asciugatura con rilascio automatico dello sportello)
+  snprintf(big, sizeof(big), R"({"name":"Apertura automatica porta","uniq_id":"dish_sw_rilascio","cmd_t":")" tx_cmd R"(","stat_t":")" stato_topic
+           R"(","val_tpl":"{{ 'ON' if value_json.rilascio == 1 else 'OFF' }}","pl_on":"rilascio ON","pl_off":"rilascio OFF",)"
+           R"("stat_on":"ON","stat_off":"OFF","ic":"mdi:door-open",%s})", dev);
+  client.publish("homeassistant/switch/dish_rilascio/config", big, true);
   snprintf(msg, sizeof(msg), "{\"name\":\"Ultimo comando\",\"uniq_id\":\"dish_esito\",\"stat_t\":\"" tx_esito
            "\",\"val_tpl\":\"{{ (value_json.prova ~ ': ' ~ value_json.esito)[:250] }}\",\"json_attr_t\":\"" tx_esito "\",\"ic\":\"mdi:console-line\",%s}", dev);
   client.publish("homeassistant/sensor/dish_esito/config", msg, true);
@@ -505,7 +520,7 @@ void domandaStato()
 void inviaComando()
 {
   if (sondaEsito != 1) { sonda(); if (sondaEsito != 1) { esito(cmdNome, "non inviato", "il nero non scende"); return; } }
-  uint8_t f[17] = {0xAA, 0x10, 0xE1, 0, 0, 0, 0, 0, 0, 0x02, cmdCorpo[0], cmdCorpo[1], 0, 0, 0, 0, 0};
+  uint8_t f[17] = {0xAA, 0x10, 0xE1, 0, 0, 0, 0, 0, 0, 0x02, cmdCorpo[0], cmdCorpo[1], cmdCorpo[2], 0, 0, 0, 0};
   uint8_t sum = 0; for (int k = 1; k < 16; k++) sum += f[k];
   f[16] = (uint8_t)(~sum + 1);
   memcpy(cmdFrame, f, 17);
@@ -548,14 +563,19 @@ void callback(char *topic, byte *payload, unsigned int len)
   else if (t == baud_cmd) { uint32_t b = p.toInt(); if (b >= 1200 && b <= 115200) { baudRate = b; startUART(); client.publish(baud_state, String(baudRate).c_str(), true); } }
   else if (t == tx_cmd)
   {
-    auto cmd = [&](const char *n, uint8_t a, uint8_t b) { cmdCorpo[0] = a; cmdCorpo[1] = b; snprintf(cmdNome, sizeof(cmdNome), "%s", n); txRichiesta = 'c'; };
+    auto cmd = [&](const char *n, uint8_t a, uint8_t b, uint8_t c3 = 0) { cmdCorpo[0] = a; cmdCorpo[1] = b; cmdCorpo[2] = c3; snprintf(cmdNome, sizeof(cmdNome), "%s", n); txRichiesta = 'c'; };
     if (p == "sonda") txRichiesta = 's'; else if (p == "stato") { cmdNome[0] = 0; txRichiesta = 'q'; }
     else if (p == "avvia") cmd("avvia", 0x02, 0x01); else if (p == "annulla") cmd("annulla", 0x02, 0x05);
     else if (p == "pausa") cmd("pausa", 0x02, 0x02); else if (p == "riprendi") cmd("riprendi", 0x02, 0x03);
     else if (p.startsWith("programma ")) cmd("programma", 0x03, (uint8_t)strtol(p.c_str() + 10, NULL, 16));
     else if (p.startsWith("cestelli ")) cmd("cestelli", 0x05, (uint8_t)strtol(p.c_str() + 9, NULL, 16));
-    else if (p.startsWith("grezzo ") && p.length() >= 12)          // 2.3: «grezzo XX YY» per le prove (corpo XX YY 00 00 00 00)
-      cmd("grezzo", (uint8_t)strtol(p.substring(7, 9).c_str(), NULL, 16), (uint8_t)strtol(p.substring(10, 12).c_str(), NULL, 16));
+    // 2.5 (19/11/2026): apertura automatica della porta in asciugatura, dall'app SmartThings: corpo 01 02 00 = attiva,
+    // 01 02 01 = disattiva (stato byte 22: 04 attiva, 06 disattiva = bit 1)
+    else if (p == "rilascio ON") cmd("apertura automatica", 0x01, 0x02, 0x00);
+    else if (p == "rilascio OFF") cmd("apertura automatica", 0x01, 0x02, 0x01);
+    else if (p.startsWith("grezzo ") && p.length() >= 12)          // 2.3: «grezzo XX YY [ZZ]» per le prove (corpo XX YY ZZ 00 00 00)
+      cmd("grezzo", (uint8_t)strtol(p.substring(7, 9).c_str(), NULL, 16), (uint8_t)strtol(p.substring(10, 12).c_str(), NULL, 16),
+          p.length() >= 15 ? (uint8_t)strtol(p.substring(13, 15).c_str(), NULL, 16) : 0);
     txChiesta = millis();
   }
   else if (t == inv_cmd) { invert = (p == "1" || p == "ON"); startUART(); client.publish(inv_state, invert ? "1" : "0", true); }
