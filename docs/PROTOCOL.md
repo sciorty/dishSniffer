@@ -98,10 +98,16 @@ number of items (`0x13` = 19), then items `tag, length, value`.
 | 87 | 650 | 65.0 °C, wash temperature |
 | 88 | 580 / 700 | final rinse temperature: 58.0 °C in an Intensive 65°, **70.0 °C with Sanitize** |
 | 86 | 230 | 23.0 °C, inlet water ? |
-| 80 | 242 → 243 | **completed washes, total** (a wash cancelled early is not counted) |
-| 71, 72 | 167 / 18 (Intensive), 130 / 22 (Auto + Sanitize) | ? water (dl)? |
-| 84 | `A0` (Intensive), `C0` (Auto + Sanitize) | flags ? |
-| 70, 73, 81–83, 85, 89–92, 94 | | same in both washes so far |
+| 80 | 242 → 243 → 244 | **completed washes, total** (a wash cancelled early is not counted) |
+| 83 | 1, 1, then 0 | **rinse aid low** (probably): 1 in the two washes before refilling it, 0 in the first wash after. The app's "rinse aid low" warning disappeared at the same time |
+| 71, 72 | 167 / 18 (Intensive), 130 / 22 (Auto + Sanitize), 138 / 18 (Eco) | ? water (dl)? |
+| 81, 82 | always 1 | ? (salt?) |
+| 70, 73, 84, 85, 89–92, 94 | | same in every wash so far |
+
+Careful when concatenating: the last byte of each part is its checksum, not data (it looks like a value for `84`).
+
+Eco 50° (20/11): 0.746 kWh, wash 50.0 °C, rinse 45.0 °C, inlet 24.0 °C; with auto door release the door opened
+**50 minutes** before the end (10 minutes in Auto): the drying phase is longer.
 
 A full annotated wash (Italian) is in [analisi-20261118.md](analisi-20261118.md).
 
