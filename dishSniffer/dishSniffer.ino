@@ -27,7 +27,7 @@
 #include "esp_rom_gpio.h"
 #include "soc/gpio_sig_map.h"
 
-#define FW_VERSION     "2.5 (19/11/2026)"
+#define FW_VERSION     "2.6 (20/11/2026)"
 #ifndef AIO_SERVER
 #define AIO_SERVER     "homeassistant.local"   // indirizzo del broker MQTT: meglio definirlo in secrets.h
 #endif
@@ -67,7 +67,7 @@ PubSubClient client(net);
 
 uint32_t baudRate = 9600;
 bool     invert = false;
-bool     capturing = true;          // 1.8: registrazione sempre attiva (HA la salva su file: pyscript/trama_lavastoviglie.py)
+bool     capturing = false;         // 2.6: registrazione spenta all'avvio (si accende da HA; i rapporti di fine lavaggio li archivia pyscript/rapporti_lavastoviglie.py)
 
 struct Verso {
   HardwareSerial *ser;
@@ -321,30 +321,20 @@ void publishDiscovery()
   snprintf(msg, sizeof(msg), "{\"name\":\"Registra trama\",\"uniq_id\":\"dish_capture\",\"cmd_t\":\"" cap_cmd "\",\"stat_t\":\"" cap_state
            "\",\"ic\":\"mdi:record-rec\",\"ent_cat\":\"config\",%s}", dev);
   client.publish("homeassistant/switch/dish_capture/config", msg, true);
-  snprintf(msg, sizeof(msg), "{\"name\":\"Baud\",\"uniq_id\":\"dish_baud\",\"cmd_t\":\"" baud_cmd "\",\"stat_t\":\"" baud_state
-           "\",\"min\":1200,\"max\":115200,\"step\":100,\"mode\":\"box\",\"ret\":true,\"ic\":\"mdi:speedometer\",\"ent_cat\":\"config\",%s}", dev);
-  client.publish("homeassistant/number/dish_baud/config", msg, true);
-  snprintf(msg, sizeof(msg), "{\"name\":\"Segnale invertito\",\"uniq_id\":\"dish_invert\",\"cmd_t\":\"" inv_cmd "\",\"stat_t\":\"" inv_state
-           "\",\"pl_on\":\"1\",\"pl_off\":\"0\",\"ic\":\"mdi:invert-colors\",\"ent_cat\":\"config\",%s}", dev);
-  client.publish("homeassistant/switch/dish_invert/config", msg, true);
-  snprintf(msg, sizeof(msg), "{\"name\":\"Ultima trama\",\"uniq_id\":\"dish_last\",\"stat_t\":\"" last_topic
-           "\",\"val_tpl\":\"{{ value[:255] }}\",\"ic\":\"mdi:code-brackets\",\"ent_cat\":\"diagnostic\",%s}", dev);
-  client.publish("homeassistant/sensor/dish_last/config", msg, true);
+  // 2.6 (20/11/2026): tolte dal pannello le entità di quando cercavamo fili e velocità (bus noto: 9600 8N1, non invertito).
+  // Un messaggio vuoto e trattenuto le cancella da Home Assistant; i comandi MQTT dish/cfg/* funzionano ancora per le prove.
+  const char *via[] = {"number/dish_baud", "switch/dish_invert", "sensor/dish_last", "sensor/dish_frames_sm", "sensor/dish_frames_ms",
+                       "sensor/dish_giallo_cambi", "sensor/dish_fronti_sm", "sensor/dish_fronti_ms", "sensor/dish_alto_sm",
+                       "sensor/dish_alto_ms", "binary_sensor/dish_giallo", "sensor/dish_bus_opzione"};
+  char topic[96];
+  for (const char *v : via) { snprintf(topic, sizeof(topic), "homeassistant/%s/config", v); client.publish(topic, "", true); }
 
   struct S { const char *id, *nome, *campo, *extra; };
   const S s[] = {
     {"frames",    "Trame ricevute",       "frames",       ",\"stat_cla\":\"total_increasing\""},
-    {"frames_sm", "Trame scheda→modulo",  "frames_sm",    ",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:arrow-right-bold\""},
-    {"frames_ms", "Trame modulo→scheda",  "frames_ms",    ",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:arrow-left-bold\""},
-    {"giallo_cambi", "Cambi filo marrone", "giallo_cambi", ",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:sine-wave\""},
     {"rssi",      "Segnale Wi-Fi",        "rssi",         ",\"unit_of_meas\":\"dBm\",\"dev_cla\":\"signal_strength\""},
     {"ip",        "Indirizzo IP",         "ip",           ",\"ic\":\"mdi:ip-network\""},
-    {"fronti_sm", "Commutazioni G22",     "fronti_sm",    ",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:pulse\""},
-    {"fronti_ms", "Commutazioni G19",     "fronti_ms",    ",\"stat_cla\":\"total_increasing\",\"ic\":\"mdi:pulse\""},
-    {"alto_sm",   "G22 alto (%)",         "alto_sm_pct",  ",\"unit_of_meas\":\"%\",\"ic\":\"mdi:gauge\""},
-    {"alto_ms",   "G19 alto (%)",         "alto_ms_pct",  ",\"unit_of_meas\":\"%\",\"ic\":\"mdi:gauge\""},
   };
-  char topic[96];
   for (const S &x : s)
   {
     snprintf(topic, sizeof(topic), "homeassistant/sensor/dish_%s/config", x.id);
@@ -352,9 +342,6 @@ void publishDiscovery()
              "\",\"val_tpl\":\"{{ value_json.%s }}\"%s,\"ent_cat\":\"diagnostic\",%s}", x.nome, x.id, x.campo, x.extra, dev);
     client.publish(topic, msg, true);
   }
-  snprintf(msg, sizeof(msg), "{\"name\":\"Filo marrone (G23)\",\"uniq_id\":\"dish_giallo\",\"stat_t\":\"" giallo_topic
-           "\",\"ic\":\"mdi:cable-data\",\"ent_cat\":\"diagnostic\",%s}", dev);
-  client.publish("homeassistant/binary_sensor/dish_giallo/config", msg, true);
 
   // stato decodificato (dish/stato)
   struct E { const char *comp, *id, *nome, *tpl, *extra; };
@@ -365,7 +352,6 @@ void publishDiscovery()
     {"sensor", "bus_fase", "Fase (bus)", "{{ value_json.fase_nome }}", ",\"ic\":\"mdi:water-sync\""},
     {"binary_sensor", "bus_armata", "Armata da remoto (bus)", "{{ 'ON' if value_json.armata == 1 else 'OFF' }}", ",\"ic\":\"mdi:remote\""},
     {"binary_sensor", "bus_porta", "Porta (bus)", "{{ 'ON' if value_json.porta in ['aperta', 'aperta (automatica)'] else 'OFF' }}", ",\"dev_cla\":\"door\""},
-    {"sensor", "bus_opzione", "Opzione (bus)", "{{ value_json.opzione }}", ",\"ic\":\"mdi:tune\",\"ent_cat\":\"diagnostic\""},
     {"sensor", "bus_cestelli", "Cestelli (bus)", "{{ value_json.cestelli }}", ",\"ic\":\"mdi:tray-full\""},
     {"sensor", "bus_ritardo", "Ritardo partenza (bus)", "{{ value_json.ritardo }}", ",\"unit_of_meas\":\"min\",\"ic\":\"mdi:timer-play-outline\""},
     {"sensor", "bus_avanzamento", "Avanzamento (bus)", "{{ value_json.avanzamento }}", ",\"unit_of_meas\":\"%\",\"ic\":\"mdi:progress-clock\""},
@@ -382,8 +368,8 @@ void publishDiscovery()
              "\",\"val_tpl\":\"%s\"%s,%s}", x.nome, x.id, x.tpl, x.extra, dev);
     client.publish(topic, msg, true);
   }
-  // 2.0: energia del lavaggio in corso (total_increasing: a ogni lavaggio riparte da 0 e HA lo conta come nuovo giro)
-  snprintf(msg, sizeof(msg), "{\"name\":\"Energia lavaggio in corso\",\"uniq_id\":\"dish_energia\",\"stat_t\":\"" energia_topic
+  // 2.0: contatore 1A0B; 2.6: è un totale della scheda (non riparte a ogni lavaggio), il nome ora lo dice
+  snprintf(msg, sizeof(msg), "{\"name\":\"Contatore energia (scheda)\",\"uniq_id\":\"dish_energia\",\"stat_t\":\"" energia_topic
            "\",\"val_tpl\":\"{{ value_json.kwh }}\",\"unit_of_meas\":\"kWh\",\"dev_cla\":\"energy\",\"stat_cla\":\"total_increasing\",%s}", dev);
   client.publish("homeassistant/sensor/dish_energia/config", msg, true);
   struct C { const char *id, *nome, *tpl, *extra; };

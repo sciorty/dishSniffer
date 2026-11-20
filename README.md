@@ -233,6 +233,8 @@ OTA has no password: keep the Atom on a trusted network.
      N hours later if it is armed;
    - [pyscript/](homeassistant/pyscript/) (needs [pyscript](https://github.com/custom-components/pyscript)):
      `trama_lavastoviglie.py` writes every frame to `/config/lavastoviglie/catture/YYYYMMDD.txt` (30 days);
+     `rapporti_lavastoviglie.py` appends every end-of-cycle report to `/config/lavastoviglie/rapporti.txt` (one line per
+     wash, always on: useful to decode new fields, e.g. salt, when the dishwasher complains);
      `lavastoviglie_energia.py` turns the board's counter into an ever-increasing `sensor.lavastoviglie_energia` for
      the Energy dashboard and `sensor.lavastoviglie_energia_lavaggio` (kWh of the current or last wash).
 
@@ -247,13 +249,13 @@ OTA has no password: keep the Atom on a trusted network.
 | `binary_sensor.…_porta_bus` | door (on also when it opens by itself in drying) |
 | `binary_sensor.…_speed_booster_bus`, `…_igienizzazione_bus` | Speed Booster, Sanitize |
 | `switch.…_apertura_automatica_porta` | auto door release in drying (on/off) |
-| `sensor.…_energia_lavaggio_in_corso` | the board's energy counter, kWh (a running total, despite the name) |
+| `sensor.…_energia_lavaggio_in_corso` | "Contatore energia (scheda)": the board's energy counter, kWh (a running total; the entity id keeps its old name) |
 | `sensor.…_lavaggi_completati_totale` | completed washes, from the end-of-cycle report |
 | `sensor.…_ultimo_lavaggio_*` | end-of-cycle report: energy, temperatures, raw fields |
 | `button.…_avvia / _pausa / _riprendi / _annulla` | commands |
 | `select.…_programma`, `select.…_cestelli` | program, baskets |
 | `sensor.…_ultimo_comando` | result of the last command (echo seen and board answered) |
-| `switch.…_registra_trama`, `number.…_baud`, `switch.…_segnale_invertito` | debug |
+| `switch.…_registra_trama` | debug: write every frame to files (off at boot since 2.6) |
 
 (`…` = `lavastoviglie_sniffer_bus_wi_fi`)
 

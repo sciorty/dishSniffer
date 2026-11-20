@@ -65,7 +65,7 @@ With the dishwasher **unplugged**, panel open:
    - `sensor.lavastoviglie_sniffer_bus_wi_fi_trame_ricevute` keeps increasing (a frame every 15 s at least);
    - `sensor.…_stato_bus` shows *Ferma*, `sensor.…_programma_bus` shows the program on the panel;
    - SmartThings, if they use it, still works.
-5. If nothing arrives: check GND, then swap yellow and black (harmless), then check the baud rate (9600).
+5. If nothing arrives: check GND, then swap yellow and black (harmless), then check the baud rate (9600: it can be changed over MQTT with `dish/cfg/baud`, and `dish/cfg/invert` inverts the signal).
 
 ## Step 5: check what they see
 
